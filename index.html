@@ -51,13 +51,45 @@
   .board th:nth-child(4), .board td:nth-child(4) { text-align:right; font-variant-numeric:tabular-nums; }
   .board tbody tr:nth-child(1) td { color:var(--orange); font-weight:700; }
   .board p { margin:8px 0 2px; }
+  .authbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center; min-height:44px; }
+  .authbar [hidden], .panel[hidden] { display:none; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:center; }
+  input, select {
+    font:inherit; font-size:15px; padding:9px 12px; border-radius:12px; width:150px;
+    border:3px solid var(--orange); background:var(--cream); color:var(--navy);
+    user-select:text; -webkit-user-select:text;
+  }
+  button.small { font-size:14px; padding:8px 16px; box-shadow:0 3px 0 #1a0f30; }
+  button:disabled { opacity:.6; cursor:default; }
+  .msg { font-size:13px; min-height:1.2em; }
+  .panel {
+    width:min(96vw,520px); background:rgba(255,243,220,.1); border:2px solid var(--orange);
+    border-radius:16px; padding:14px 18px 12px;
+  }
+  .panel h2 { margin:0 0 10px; font-size:16px; text-align:center; color:var(--orange); letter-spacing:.05em; }
+  .panel table { width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
+  .panel th { text-align:left; opacity:.7; padding:4px 6px; border-bottom:1px solid rgba(255,243,220,.25); }
+  .panel td { padding:4px 6px; }
 </style>
 </head>
 <body>
 <h1>ORANGE <span>DINO</span> RUN</h1>
+<div class="authbar" id="authBar">
+  <form id="loginForm" class="row">
+    <input id="loginUser" placeholder="Username" autocomplete="username" maxlength="16" aria-label="Username">
+    <input id="loginPass" type="password" placeholder="Password" autocomplete="current-password" aria-label="Password">
+    <button id="loginBtn" class="small" type="submit">Sign in</button>
+  </form>
+  <div id="signedIn" class="row" hidden>
+    <span id="whoami"></span>
+    <button id="accountBtn" class="small" type="button">Account</button>
+    <button id="logoutBtn" class="small" type="button">Sign out</button>
+  </div>
+  <span id="authMsg" class="msg" role="status"></span>
+</div>
 <canvas id="c" width="800" height="260" aria-label="Orange Dino Run game"></canvas>
 <form id="scoreForm" class="scoreform" hidden>
-  <input id="nameInput" maxlength="16" placeholder="Nickname (no real names)" autocomplete="off" aria-label="Nickname">
+  <span id="saveWho"></span>
   <button id="saveBtn" type="submit">Save score</button>
   <span id="saveMsg" role="status"></span>
 </form>
@@ -80,6 +112,32 @@
   <p id="boardStatus" class="hint">Loading&hellip;</p>
 </section>
 
+<section id="accountPanel" class="panel" hidden aria-label="Account">
+  <h2>YOUR ACCOUNT</h2>
+  <form id="passwordForm" class="row">
+    <input id="newPass" type="password" placeholder="New password" autocomplete="new-password" aria-label="New password">
+    <button class="small" type="submit">Change password</button>
+  </form>
+  <p id="passMsg" class="msg hint" role="status"></p>
+</section>
+
+<section id="adminPanel" class="panel" hidden aria-label="User management">
+  <h2>USER MANAGEMENT (ADMIN)</h2>
+  <form id="addUserForm" class="row">
+    <input id="newUser" placeholder="Username" maxlength="16" autocomplete="off" aria-label="New username">
+    <input id="newName" placeholder="Display name" maxlength="30" autocomplete="off" aria-label="Display name">
+    <input id="newUserPass" type="password" placeholder="Initial password" autocomplete="new-password" aria-label="Initial password">
+    <select id="newRole" aria-label="Role"><option value="player">Player</option><option value="admin">Admin</option></select>
+    <button class="small" type="submit">Add user</button>
+  </form>
+  <p id="adminMsg" class="msg hint" role="status"></p>
+  <table>
+    <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Added</th></tr></thead>
+    <tbody id="userBody"></tbody>
+  </table>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const c = document.getElementById('c'), ctx = c.getContext('2d');
 const W = c.width, H = c.height, GROUND = 214;
@@ -131,7 +189,7 @@ function jump() {
   if (dino.onGround) { dino.vy = -12.5; dino.onGround = false; }
 }
 addEventListener('keydown', e => {
-  if (e.target && e.target.tagName === 'INPUT') return;   // let players type their nickname
+  if (e.target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;   // let people type in forms
   if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
   if (e.code === 'Space' || e.code === 'ArrowUp') { if (!(e.repeat && over)) jump(); }
   if (e.code === 'ArrowDown') keys.down = true;
@@ -403,12 +461,16 @@ function draw() {
 
 /* ---------- Leaderboard (Supabase) ---------- */
 // The publishable key is designed to be public in the browser. What it can do is
-// limited by row-level security: anyone can read scores and add one, nothing else.
+// limited by row-level security: anyone can read scores, only signed-in players can
+// add their own, and only admins can see the user list or add users.
 const SUPABASE_URL = 'https://irfwmclvomqbtdbcijes.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_PRy-_DqwPCw2Sl94rzISNw_MNNXJsB_';
+const EMAIL_DOMAIN = 'dinorun.example.com';   // usernames map to <username>@dinorun.example.com in Supabase Auth
 const sbHeaders = { apikey:SUPABASE_KEY, 'Content-Type':'application/json' };
 const byId = id => document.getElementById(id);
+const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 let lastRun = { score:0, level:1 };
+let currentProfile = null;   // { id, username, display_name, role } when signed in
 
 async function loadBoard() {
   const body = byId('boardBody'), status = byId('boardStatus');
@@ -430,34 +492,131 @@ async function loadBoard() {
   }
 }
 
+/* ---------- Score saving (signed-in players only) ---------- */
+function renderScoreForm() {
+  if (lastRun.score < 1) return;
+  const signedIn = !!currentProfile;
+  byId('saveWho').textContent = signedIn
+    ? 'Save ' + lastRun.score + ' as ' + currentProfile.username + '?'
+    : 'Sign in above to save your score to the leaderboard.';
+  byId('saveBtn').hidden = !signedIn;
+  byId('saveBtn').disabled = false;
+  byId('saveMsg').textContent = '';
+  byId('scoreForm').hidden = false;
+}
 function showSubmit() {
   lastRun = { score:Math.floor(score), level };
-  if (lastRun.score < 1) return;
-  try { byId('nameInput').value = localStorage.getItem('dinoName') || ''; } catch (e) {}
-  byId('saveBtn').disabled = false; byId('saveMsg').textContent = '';
-  byId('scoreForm').hidden = false;
+  renderScoreForm();
 }
 function hideSubmit() { const f = document.getElementById('scoreForm'); if (f) f.hidden = true; }
 
 byId('scoreForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const name = byId('nameInput').value.trim().slice(0, 16);
-  if (!name) { byId('saveMsg').textContent = 'Please enter a nickname.'; return; }
+  if (!sb || !currentProfile) { byId('saveMsg').textContent = 'Please sign in first.'; return; }
   byId('saveBtn').disabled = true; byId('saveMsg').textContent = 'Saving…';
-  try { localStorage.setItem('dinoName', name); } catch (err) {}
-  try {
-    const res = await fetch(SUPABASE_URL + '/rest/v1/dino_scores', {
-      method:'POST', headers:{ ...sbHeaders, Prefer:'return=minimal' },
-      body:JSON.stringify({ player_name:name, score:lastRun.score, level:lastRun.level })
-    });
-    if (!res.ok) throw new Error(res.status);
-    byId('saveMsg').textContent = 'Score saved!';
-    loadBoard();
-  } catch (err) {
+  const { error } = await sb.from('dino_scores').insert({
+    user_id:currentProfile.id, player_name:currentProfile.username,
+    score:lastRun.score, level:lastRun.level
+  });
+  if (error) {
     byId('saveMsg').textContent = "Couldn't save. Please try again.";
     byId('saveBtn').disabled = false;
+  } else {
+    byId('saveMsg').textContent = 'Score saved!';
+    loadBoard();
   }
 });
+
+/* ---------- Sign in / sign out / user management ---------- */
+const setText = (id, text) => { byId(id).textContent = text; };
+
+function renderAuth() {
+  const p = currentProfile;
+  byId('loginForm').hidden = !!p;
+  byId('signedIn').hidden = !p;
+  byId('accountPanel').hidden = true;
+  byId('adminPanel').hidden = !(p && p.role === 'admin');
+  if (p) setText('whoami', 'Hi, ' + p.display_name + (p.role === 'admin' ? ' (admin)' : ''));
+  if (p && p.role === 'admin') loadUsers();
+  if (over) renderScoreForm();
+}
+
+async function applySession(session) {
+  if (!session) { currentProfile = null; renderAuth(); return; }
+  const { data } = await sb.from('profiles').select('id,username,display_name,role').eq('id', session.user.id).maybeSingle();
+  currentProfile = data || null;
+  renderAuth();
+}
+
+async function loadUsers() {
+  const { data, error } = await sb.from('profiles').select('username,display_name,role,created_at').order('created_at');
+  const body = byId('userBody'); body.textContent = '';
+  if (error) { setText('adminMsg', "Couldn't load the user list."); return; }
+  (data || []).forEach(u => {
+    const tr = document.createElement('tr');
+    const added = new Date(u.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+    [u.username, u.display_name, u.role, added].forEach(v => {
+      const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+}
+
+if (sb) {
+  // Supabase restores any saved session on page load, then fires this for every sign in or out.
+  // The work is deferred so no Supabase call runs inside the callback itself.
+  sb.auth.onAuthStateChange((event, session) => { setTimeout(() => applySession(session), 0); });
+
+  byId('loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const username = byId('loginUser').value.trim().toLowerCase(), password = byId('loginPass').value;
+    if (!username || !password) { setText('authMsg', 'Enter your username and password.'); return; }
+    byId('loginBtn').disabled = true; setText('authMsg', 'Signing in…');
+    const { error } = await sb.auth.signInWithPassword({ email:username + '@' + EMAIL_DOMAIN, password });
+    byId('loginBtn').disabled = false;
+    if (error) { setText('authMsg', 'Wrong username or password.'); return; }
+    byId('loginPass').value = ''; setText('authMsg', '');
+  });
+
+  byId('logoutBtn').addEventListener('click', async () => {
+    await sb.auth.signOut();
+    byId('loginUser').value = ''; setText('authMsg', 'You have signed out.');
+  });
+
+  byId('accountBtn').addEventListener('click', () => {
+    const panel = byId('accountPanel'); panel.hidden = !panel.hidden; setText('passMsg', '');
+  });
+
+  byId('passwordForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const pw = byId('newPass').value;
+    if (pw.length < 6) { setText('passMsg', 'Use at least 6 characters.'); return; }
+    const { error } = await sb.auth.updateUser({ password:pw });
+    if (error) setText('passMsg', "Couldn't change the password. Please try again.");
+    else { byId('newPass').value = ''; setText('passMsg', 'Password changed.'); }
+  });
+
+  byId('addUserForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = {
+      action:'create_user', username:byId('newUser').value.trim().toLowerCase(),
+      display_name:byId('newName').value.trim(), password:byId('newUserPass').value, role:byId('newRole').value
+    };
+    setText('adminMsg', 'Adding user…');
+    const { error } = await sb.functions.invoke('manage-users', { body });
+    if (error) {
+      let msg = "Couldn't add the user.";
+      try { msg = (await error.context.json()).error || msg; } catch (err) {}
+      setText('adminMsg', msg); return;
+    }
+    setText('adminMsg', 'User "' + body.username + '" added.');
+    ['newUser', 'newName', 'newUserPass'].forEach(id => { byId(id).value = ''; });
+    loadUsers();
+  });
+} else {
+  setText('authMsg', 'Sign-in is unavailable right now. You can still play.');
+  byId('loginForm').hidden = true;
+}
 loadBoard();
 
 (function loop() { update(); draw(); requestAnimationFrame(loop); })();

@@ -19,14 +19,33 @@ Built with plain HTML, CSS and JavaScript (no build step, no dependencies).
 
 The background deepens in colour at each level, and a banner announces each level-up. The high score is saved in the browser.
 
-## Leaderboard (Supabase)
+## Accounts and leaderboard (Supabase)
 
-After a game ends, players can save their score under a nickname. The Top 10 is shown under the game.
+Anyone can play and see the Top 10. Players sign in with a username and password to save their score.
 
-- Table: `public.dino_scores` (`player_name`, `score`, `level`, `created_at`) with row-level security.
-- Anyone can read scores and add one (nickname 1–16 characters, score 0–99999, level 1–3). Updates and deletes are blocked.
-- The Supabase URL and publishable key in `index.html` are meant to be public. Do not put a secret or service-role key in this repo.
-- Scores are submitted from the browser, so a determined player could still submit a fake score. For a stricter leaderboard, validate scores in a Supabase Edge Function.
+- **Sign in / sign out:** the bar above the game. Passwords are stored by Supabase Auth in `auth.users`. A username maps to the email `<username>@dinorun.example.com`, a placeholder address that never receives mail.
+- **Users:** `alex` (admin), `anna`, `alvin`, `alson` and `joey` were created with the initial password `password`. **Change it** from the Account button after signing in.
+- **Admin:** an admin sees a user management panel to add users with an initial password. It calls the `manage-users` Edge Function, which checks the caller is an admin and uses the service-role key on the server only.
+
+### Tables
+
+| Table | Purpose |
+|---|---|
+| `auth.users` | Supabase's built-in user and password store |
+| `public.profiles` | One row per user: username, display name, role (`admin` or `player`). Created automatically by a trigger on `auth.users`. |
+| `public.dino_scores` | Scores, linked to `auth.users` through `user_id` |
+
+### Access rules (row-level security)
+
+- Anyone can read scores.
+- Only a signed-in player can add a score, and only under their own user and username. Scores cannot be edited or deleted from the app.
+- A player can read only their own profile. An admin can read all profiles. Roles can only be changed in the database.
+
+### Security notes
+
+- The Supabase URL and publishable key in `index.html` are meant to be public. Never put a secret or service-role key in this repo.
+- In the Supabase dashboard, turn **off** "Allow new users to sign up" (Authentication > Sign In / Providers) so only admins can create accounts, and turn **on** leaked password protection.
+- Scores are submitted from the browser, so a determined player could still submit a fake score. For a stricter leaderboard, validate scores in an Edge Function.
 
 ## Run locally
 
