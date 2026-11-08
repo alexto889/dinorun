@@ -19,6 +19,15 @@ Built with plain HTML, CSS and JavaScript (no build step, no dependencies).
 
 The background deepens in colour at each level, and a banner announces each level-up. The high score is saved in the browser.
 
+## Leaderboard (Supabase)
+
+After a game ends, players can save their score under a nickname. The Top 10 is shown under the game.
+
+- Table: `public.dino_scores` (`player_name`, `score`, `level`, `created_at`) with row-level security.
+- Anyone can read scores and add one (nickname 1–16 characters, score 0–99999, level 1–3). Updates and deletes are blocked.
+- The Supabase URL and publishable key in `index.html` are meant to be public. Do not put a secret or service-role key in this repo.
+- Scores are submitted from the browser, so a determined player could still submit a fake score. For a stricter leaderboard, validate scores in a Supabase Edge Function.
+
 ## Run locally
 
 Open `index.html` in any modern browser.

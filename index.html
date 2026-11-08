@@ -31,11 +31,36 @@
   .legend { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; font-size:13px; }
   .legend span { padding:5px 12px; border-radius:999px; background:rgba(255,243,220,.14); }
   .hint { margin:0; font-size:13px; opacity:.85; text-align:center; }
+  .scoreform { display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  .scoreform[hidden] { display:none; }
+  .scoreform input {
+    font:inherit; font-size:16px; padding:11px 14px; border-radius:12px; width:190px;
+    border:3px solid var(--orange); background:var(--cream); color:var(--navy);
+  }
+  .scoreform button { padding:10px 22px; }
+  .scoreform button:disabled { opacity:.6; cursor:default; }
+  #saveMsg { font-size:14px; min-width:150px; }
+  .board {
+    width:min(96vw,420px); background:rgba(255,243,220,.1); border:2px solid var(--orange);
+    border-radius:16px; padding:14px 18px 10px;
+  }
+  .board h2 { margin:0 0 8px; font-size:18px; text-align:center; color:var(--orange); letter-spacing:.05em; }
+  .board table { width:100%; border-collapse:collapse; font-size:14px; }
+  .board th { text-align:left; font-weight:700; opacity:.7; padding:4px 6px; border-bottom:1px solid rgba(255,243,220,.25); }
+  .board td { padding:5px 6px; }
+  .board th:nth-child(4), .board td:nth-child(4) { text-align:right; font-variant-numeric:tabular-nums; }
+  .board tbody tr:nth-child(1) td { color:var(--orange); font-weight:700; }
+  .board p { margin:8px 0 2px; }
 </style>
 </head>
 <body>
 <h1>ORANGE <span>DINO</span> RUN</h1>
 <canvas id="c" width="800" height="260" aria-label="Orange Dino Run game"></canvas>
+<form id="scoreForm" class="scoreform" hidden>
+  <input id="nameInput" maxlength="16" placeholder="Nickname (no real names)" autocomplete="off" aria-label="Nickname">
+  <button id="saveBtn" type="submit">Save score</button>
+  <span id="saveMsg" role="status"></span>
+</form>
 <div class="controls">
   <button id="jumpBtn" type="button">Jump</button>
   <button id="duckBtn" type="button">Duck</button>
@@ -46,6 +71,14 @@
   <span>Level 3: 1000+ (birds!)</span>
 </div>
 <p class="hint">Space / Up arrow / tap to jump &middot; hold Down arrow to duck</p>
+<section class="board" aria-label="Leaderboard">
+  <h2>TOP 10</h2>
+  <table>
+    <thead><tr><th>#</th><th>Player</th><th>Level</th><th>Score</th></tr></thead>
+    <tbody id="boardBody"></tbody>
+  </table>
+  <p id="boardStatus" class="hint">Loading&hellip;</p>
+</section>
 
 <script>
 const c = document.getElementById('c'), ctx = c.getContext('2d');
@@ -86,7 +119,8 @@ function reset() {
   obstacles = []; speed = 6; score = 0; frame = 0; level = 1; scroll = 0;
   over = false; overDelay = 0; running = true; nextSpawn = 55;
   banner = { text:'', sub:'', life:0 };
-  clouds = [{ x:180, y:58 }, { x:470, y:86 }, { x:720, y:48 }];
+  hideSubmit();
+  clouds =[{ x:180, y:58 }, { x:470, y:86 }, { x:720, y:48 }];
 }
 reset(); running = false;
 
@@ -97,6 +131,7 @@ function jump() {
   if (dino.onGround) { dino.vy = -12.5; dino.onGround = false; }
 }
 addEventListener('keydown', e => {
+  if (e.target && e.target.tagName === 'INPUT') return;   // let players type their nickname
   if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
   if (e.code === 'Space' || e.code === 'ArrowUp') { if (!(e.repeat && over)) jump(); }
   if (e.code === 'ArrowDown') keys.down = true;
@@ -254,6 +289,7 @@ function endGame() {
     hi = Math.floor(score);
     try { localStorage.setItem('dinoHi', hi); } catch (e) {}
   }
+  showSubmit();
 }
 function update() {
   t++;
@@ -364,6 +400,65 @@ function draw() {
     outlined('Press Space or tap to play again', W / 2, 148, 16, 5);
   }
 }
+
+/* ---------- Leaderboard (Supabase) ---------- */
+// The publishable key is designed to be public in the browser. What it can do is
+// limited by row-level security: anyone can read scores and add one, nothing else.
+const SUPABASE_URL = 'https://irfwmclvomqbtdbcijes.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_PRy-_DqwPCw2Sl94rzISNw_MNNXJsB_';
+const sbHeaders = { apikey:SUPABASE_KEY, 'Content-Type':'application/json' };
+const byId = id => document.getElementById(id);
+let lastRun = { score:0, level:1 };
+
+async function loadBoard() {
+  const body = byId('boardBody'), status = byId('boardStatus');
+  try {
+    const res = await fetch(SUPABASE_URL + '/rest/v1/dino_scores?select=player_name,score,level&order=score.desc,created_at.asc&limit=10', { headers:sbHeaders });
+    if (!res.ok) throw new Error(res.status);
+    const rows = await res.json();
+    body.textContent = '';
+    rows.forEach((r, i) => {
+      const tr = document.createElement('tr');
+      [i + 1, r.player_name, 'L' + r.level, r.score].forEach(v => {
+        const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    status.textContent = rows.length ? '' : 'No scores yet. Be the first!';
+  } catch (e) {
+    status.textContent = "Couldn't load the leaderboard right now.";
+  }
+}
+
+function showSubmit() {
+  lastRun = { score:Math.floor(score), level };
+  if (lastRun.score < 1) return;
+  try { byId('nameInput').value = localStorage.getItem('dinoName') || ''; } catch (e) {}
+  byId('saveBtn').disabled = false; byId('saveMsg').textContent = '';
+  byId('scoreForm').hidden = false;
+}
+function hideSubmit() { const f = document.getElementById('scoreForm'); if (f) f.hidden = true; }
+
+byId('scoreForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = byId('nameInput').value.trim().slice(0, 16);
+  if (!name) { byId('saveMsg').textContent = 'Please enter a nickname.'; return; }
+  byId('saveBtn').disabled = true; byId('saveMsg').textContent = 'Saving…';
+  try { localStorage.setItem('dinoName', name); } catch (err) {}
+  try {
+    const res = await fetch(SUPABASE_URL + '/rest/v1/dino_scores', {
+      method:'POST', headers:{ ...sbHeaders, Prefer:'return=minimal' },
+      body:JSON.stringify({ player_name:name, score:lastRun.score, level:lastRun.level })
+    });
+    if (!res.ok) throw new Error(res.status);
+    byId('saveMsg').textContent = 'Score saved!';
+    loadBoard();
+  } catch (err) {
+    byId('saveMsg').textContent = "Couldn't save. Please try again.";
+    byId('saveBtn').disabled = false;
+  }
+});
+loadBoard();
 
 (function loop() { update(); draw(); requestAnimationFrame(loop); })();
 </script>
